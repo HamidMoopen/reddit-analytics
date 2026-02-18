@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "scrape": "node scripts/scrape.mjs",
+    "scrape:push": "node scripts/scrape.mjs && git add public/data.json && git commit -m 'update reddit data' && git push"
   },
   "dependencies": {
     "next": "16.1.6",

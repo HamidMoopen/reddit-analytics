@@ -76,9 +76,13 @@ export default function Dashboard() {
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch("/api/reddit");
-        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        // Fetch static JSON (deployed via scrape script)
+        const res = await fetch("/data.json");
+        if (!res.ok) throw new Error("No data yet — run: npm run scrape");
         const json = await res.json();
+        if (!json.posts?.length && !json.comments?.length) {
+          throw new Error("No data yet — run: npm run scrape");
+        }
         setData(json);
       } catch (e) {
         setError(String(e));
@@ -87,8 +91,6 @@ export default function Dashboard() {
       }
     }
     load();
-    const interval = setInterval(load, 30 * 60 * 1000);
-    return () => clearInterval(interval);
   }, []);
 
   const cutoff = useMemo(() => {

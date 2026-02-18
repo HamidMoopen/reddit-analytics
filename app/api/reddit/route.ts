@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
+export const runtime = "edge";
+
 const USERNAME = "Bulky-Possibility216";
-const USER_AGENT = "RedditAnalytics/1.0 (Next.js)";
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function containsSoma(text: string): boolean {
   return /soma[-\s]?health|soma[_.]?health|soma-health\.co/i.test(text);

@@ -51,14 +51,20 @@ function timeAgo(ts: number): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function fillDateRange(start: Date, end: Date): string[] {
+const CST = "America/Chicago";
+
+function toCSTDateString(d: Date): string {
+  // en-CA locale gives YYYY-MM-DD format
+  return d.toLocaleDateString("en-CA", { timeZone: CST });
+}
+
+function fillDateRange(start: string, end: string): string[] {
   const dates: string[] = [];
-  const cur = new Date(start);
-  cur.setHours(0, 0, 0, 0);
-  const e = new Date(end);
-  e.setHours(0, 0, 0, 0);
+  // Use noon UTC to avoid any DST edge-case day shifts
+  const cur = new Date(start + "T12:00:00Z");
+  const e = new Date(end + "T12:00:00Z");
   while (cur <= e) {
-    dates.push(cur.toISOString().split("T")[0]);
+    dates.push(toCSTDateString(cur));
     cur.setDate(cur.getDate() + 1);
   }
   return dates;
@@ -132,14 +138,14 @@ export default function Dashboard() {
     const map = new Map<string, { upvotes: number; comments: number }>();
 
     for (const p of posts) {
-      const day = new Date(p.createdUtc * 1000).toISOString().split("T")[0];
+      const day = toCSTDateString(new Date(p.createdUtc * 1000));
       const cur = map.get(day) || { upvotes: 0, comments: 0 };
       cur.upvotes += p.score;
       cur.comments += p.numComments;
       map.set(day, cur);
     }
     for (const c of comments) {
-      const day = new Date(c.createdUtc * 1000).toISOString().split("T")[0];
+      const day = toCSTDateString(new Date(c.createdUtc * 1000));
       const cur = map.get(day) || { upvotes: 0, comments: 0 };
       cur.upvotes += c.score;
       cur.comments += 1;
@@ -147,16 +153,18 @@ export default function Dashboard() {
     }
 
     const now = new Date();
+    const nowCST = toCSTDateString(now);
     const days = { "7d": 7, "14d": 14, "30d": 30, all: 90 }[timeRange];
-    const start =
+    const startCST =
       timeRange === "all" && map.size > 0
-        ? new Date(Array.from(map.keys()).sort()[0])
-        : new Date(now.getTime() - days * 86400000);
+        ? Array.from(map.keys()).sort()[0]
+        : toCSTDateString(new Date(now.getTime() - days * 86400000));
 
-    return fillDateRange(start, now).map((d) => {
+    return fillDateRange(startCST, nowCST).map((d) => {
       const v = map.get(d) || { upvotes: 0, comments: 0 };
       return {
-        date: new Date(d).toLocaleDateString("en-US", {
+        date: new Date(d + "T12:00:00Z").toLocaleDateString("en-US", {
+          timeZone: CST,
           month: "short",
           day: "numeric",
         }),
@@ -225,6 +233,11 @@ export default function Dashboard() {
     ];
     return items.sort((a, b) => b.ts - a.ts).slice(0, 25);
   }, [posts, comments]);
+
+  const topPosts = useMemo(
+    () => [...posts].sort((a, b) => b.score - a.score).slice(0, 5),
+    [posts]
+  );
 
   const activeMetricKey =
     metric === "impressions" ? "upvotes" : (metric as "upvotes" | "comments");
@@ -530,6 +543,60 @@ export default function Dashboard() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+          )}
+        </div>
+
+        {/* ── Top 5 Posts ── */}
+        <div className="bg-[#111116] border border-[#1c1c24] rounded-xl p-5 mb-6">
+          <h2 className="text-[13px] font-medium text-zinc-400 mb-4">
+            Top 5 Posts
+          </h2>
+          {topPosts.length > 0 ? (
+            <div className="space-y-0.5">
+              {topPosts.map((post, i) => (
+                <a
+                  key={post.id}
+                  href={`https://reddit.com${post.permalink}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-zinc-900/40 transition-colors group"
+                >
+                  <span className="text-[13px] font-bold text-zinc-700 tabular-nums w-5 text-center shrink-0">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] text-zinc-400 group-hover:text-zinc-200 truncate transition-colors leading-snug">
+                      {post.title}
+                    </p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-zinc-700">
+                        r/{post.subreddit}
+                      </span>
+                      <span className="text-[10px] text-zinc-800">·</span>
+                      <span className="text-[10px] text-orange-500/70 tabular-nums font-medium">
+                        {post.score.toLocaleString()} upvotes
+                      </span>
+                      <span className="text-[10px] text-zinc-800">·</span>
+                      <span className="text-[10px] text-zinc-600 tabular-nums">
+                        {post.numComments} comments
+                      </span>
+                      {post.mentionsSoma && (
+                        <>
+                          <span className="text-[10px] text-zinc-800">·</span>
+                          <span className="text-[10px] text-orange-600 font-medium">
+                            soma
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-zinc-700 text-xs text-center py-8">
+              No posts to display
+            </p>
           )}
         </div>
 

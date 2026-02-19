@@ -546,60 +546,6 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* ── Top 5 Posts ── */}
-        <div className="bg-[#111116] border border-[#1c1c24] rounded-xl p-5 mb-6">
-          <h2 className="text-[13px] font-medium text-zinc-400 mb-4">
-            Top 5 Posts
-          </h2>
-          {topPosts.length > 0 ? (
-            <div className="space-y-0.5">
-              {topPosts.map((post, i) => (
-                <a
-                  key={post.id}
-                  href={`https://reddit.com${post.permalink}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-zinc-900/40 transition-colors group"
-                >
-                  <span className="text-[13px] font-bold text-zinc-700 tabular-nums w-5 text-center shrink-0">
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] text-zinc-400 group-hover:text-zinc-200 truncate transition-colors leading-snug">
-                      {post.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[10px] text-zinc-700">
-                        r/{post.subreddit}
-                      </span>
-                      <span className="text-[10px] text-zinc-800">·</span>
-                      <span className="text-[10px] text-orange-500/70 tabular-nums font-medium">
-                        {post.score.toLocaleString()} upvotes
-                      </span>
-                      <span className="text-[10px] text-zinc-800">·</span>
-                      <span className="text-[10px] text-zinc-600 tabular-nums">
-                        {post.numComments} comments
-                      </span>
-                      {post.mentionsSoma && (
-                        <>
-                          <span className="text-[10px] text-zinc-800">·</span>
-                          <span className="text-[10px] text-orange-600 font-medium">
-                            soma
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <p className="text-zinc-700 text-xs text-center py-8">
-              No posts to display
-            </p>
-          )}
-        </div>
-
         {/* ── Bottom Grid ── */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* Subreddit Breakdown */}
@@ -711,6 +657,60 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* ── Top 5 Posts ── */}
+        <div className="bg-[#111116] border border-[#1c1c24] rounded-xl p-5 mt-6">
+          <h2 className="text-[13px] font-medium text-zinc-400 mb-4">
+            Top 5 Posts
+          </h2>
+          {topPosts.length > 0 ? (
+            <div className="space-y-0.5">
+              {topPosts.map((post, i) => (
+                <a
+                  key={post.id}
+                  href={`https://reddit.com${post.permalink}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-zinc-900/40 transition-colors group"
+                >
+                  <span className="text-[13px] font-bold text-zinc-700 tabular-nums w-5 text-center shrink-0">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] text-zinc-400 group-hover:text-zinc-200 truncate transition-colors leading-snug">
+                      {post.title}
+                    </p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-zinc-700">
+                        r/{post.subreddit}
+                      </span>
+                      <span className="text-[10px] text-zinc-800">·</span>
+                      <span className="text-[10px] text-orange-500/70 tabular-nums font-medium">
+                        {post.score.toLocaleString()} upvotes
+                      </span>
+                      <span className="text-[10px] text-zinc-800">·</span>
+                      <span className="text-[10px] text-zinc-600 tabular-nums">
+                        {post.numComments} comments
+                      </span>
+                      {post.mentionsSoma && (
+                        <>
+                          <span className="text-[10px] text-zinc-800">·</span>
+                          <span className="text-[10px] text-orange-600 font-medium">
+                            soma
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="text-zinc-700 text-xs text-center py-8">
+              No posts to display
+            </p>
+          )}
         </div>
 
         {/* ── Footer ── */}

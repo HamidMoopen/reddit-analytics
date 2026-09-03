@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { RedditData } from "@/lib/types";
+import { RedditData, RedditPost, RedditComment } from "@/lib/types";
 import {
   AreaChart,
   Area,
@@ -21,6 +21,13 @@ const TIME_RANGES: { key: TimeRange; label: string }[] = [
   { key: "30d", label: "30D" },
   { key: "all", label: "All" },
 ];
+
+const RANGE_DAYS: Record<TimeRange, number> = {
+  "7d": 7,
+  "14d": 14,
+  "30d": 30,
+  all: 9999,
+};
 
 const METRICS: { key: Metric; label: string }[] = [
   { key: "upvotes", label: "Upvotes" },
@@ -90,6 +97,18 @@ export default function Dashboard() {
           throw new Error("No data yet — run: npm run scrape");
         }
         setData(json);
+
+        // The account posts in bursts, so a fixed 30D default can land on a
+        // stretch with nothing in it and look like the scrape is broken.
+        // Open on the narrowest range that actually holds something.
+        const newest = Math.max(
+          0,
+          ...(json.posts || []).map((p: RedditPost) => p.createdUtc),
+          ...(json.comments || []).map((c: RedditComment) => c.createdUtc)
+        );
+        const ageDays = (Date.now() / 1000 - newest) / 86400;
+        const firstWithData = TIME_RANGES.find((r) => RANGE_DAYS[r.key] >= ageDays);
+        setTimeRange(firstWithData ? firstWithData.key : "all");
       } catch (e) {
         setError(String(e));
       } finally {
@@ -101,13 +120,7 @@ export default function Dashboard() {
 
   const cutoff = useMemo(() => {
     const now = Date.now() / 1000;
-    const days: Record<TimeRange, number> = {
-      "7d": 7,
-      "14d": 14,
-      "30d": 30,
-      all: 9999,
-    };
-    return now - days[timeRange] * 86400;
+    return now - RANGE_DAYS[timeRange] * 86400;
   }, [timeRange]);
 
   const { posts, comments } = useMemo(() => {

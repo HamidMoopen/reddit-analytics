@@ -13,13 +13,20 @@ import {
 } from "recharts";
 
 type TimeRange = "7d" | "14d" | "30d" | "all";
-type Metric = "upvotes" | "comments" | "impressions";
+type Metric = "upvotes" | "comments";
+type KindFilter = "all" | "posts" | "comments";
 
 const TIME_RANGES: { key: TimeRange; label: string }[] = [
   { key: "7d", label: "7D" },
   { key: "14d", label: "14D" },
   { key: "30d", label: "30D" },
   { key: "all", label: "All" },
+];
+
+const KIND_FILTERS: { key: KindFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "posts", label: "Posts" },
+  { key: "comments", label: "Comments" },
 ];
 
 const RANGE_DAYS: Record<TimeRange, number> = {
@@ -32,7 +39,6 @@ const RANGE_DAYS: Record<TimeRange, number> = {
 const METRICS: { key: Metric; label: string }[] = [
   { key: "upvotes", label: "Upvotes" },
   { key: "comments", label: "Comments" },
-  { key: "impressions", label: "Impressions" },
 ];
 
 const SUB_COLORS = [
@@ -65,17 +71,54 @@ function toCSTDateString(d: Date): string {
   return d.toLocaleDateString("en-CA", { timeZone: CST });
 }
 
-function fillDateRange(start: string, end: string): string[] {
-  const dates: string[] = [];
-  // Use noon UTC to avoid any DST edge-case day shifts
-  const cur = new Date(start + "T12:00:00Z");
-  const e = new Date(end + "T12:00:00Z");
-  while (cur <= e) {
-    dates.push(toCSTDateString(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return dates;
+type Bucket = "day" | "week" | "month";
+
+// Daily points over a multi-year span are unreadable, so widen the bucket
+// as the window grows.
+function bucketFor(spanDays: number): Bucket {
+  if (spanDays <= 60) return "day";
+  if (spanDays <= 400) return "week";
+  return "month";
 }
+
+// YYYY-MM-DD -> the key its bucket is filed under.
+function bucketKey(day: string, unit: Bucket): string {
+  if (unit === "day") return day;
+  if (unit === "month") return day.slice(0, 7);
+  const d = new Date(day + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); // back to Monday
+  return d.toISOString().slice(0, 10);
+}
+
+function bucketLabel(key: string, unit: Bucket): string {
+  if (unit === "month") {
+    return new Date(key + "-01T12:00:00Z").toLocaleDateString("en-US", {
+      timeZone: "UTC",
+      month: "short",
+      year: "2-digit",
+    });
+  }
+  return new Date(key + "T12:00:00Z").toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+// Every bucket from start to end, so quiet stretches read as zero, not as a gap.
+function fillBuckets(start: string, end: string, unit: Bucket): string[] {
+  const keys: string[] = [];
+  const cur = new Date(bucketKey(start, unit) + (unit === "month" ? "-01" : "") + "T12:00:00Z");
+  const last = new Date(bucketKey(end, unit) + (unit === "month" ? "-01" : "") + "T12:00:00Z");
+  while (cur <= last) {
+    keys.push(unit === "month" ? cur.toISOString().slice(0, 7) : cur.toISOString().slice(0, 10));
+    if (unit === "day") cur.setUTCDate(cur.getUTCDate() + 1);
+    else if (unit === "week") cur.setUTCDate(cur.getUTCDate() + 7);
+    else cur.setUTCMonth(cur.getUTCMonth() + 1);
+  }
+  return keys;
+}
+
 
 export default function Dashboard() {
   const [data, setData] = useState<RedditData | null>(null);
@@ -84,7 +127,7 @@ export default function Dashboard() {
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const [metric, setMetric] = useState<Metric>("upvotes");
   const [somaFilter, setSomaFilter] = useState(false);
-  const [commentsOnly, setCommentsOnly] = useState(false);
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
 
   useEffect(() => {
     async function load() {
@@ -131,9 +174,10 @@ export default function Dashboard() {
       p = p.filter((x) => x.mentionsSoma);
       c = c.filter((x) => x.mentionsSoma);
     }
-    if (commentsOnly) p = [];
+    if (kindFilter === "posts") c = [];
+    if (kindFilter === "comments") p = [];
     return { posts: p, comments: c };
-  }, [data, cutoff, somaFilter, commentsOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data, cutoff, somaFilter, kindFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stats = useMemo(
     () => ({
@@ -147,45 +191,38 @@ export default function Dashboard() {
     [posts, comments]
   );
 
-  const chartData = useMemo(() => {
-    const map = new Map<string, { upvotes: number; comments: number }>();
+  const { chartData, bucketUnit } = useMemo(() => {
+    const all = [...posts, ...comments];
+    const nowCST = toCSTDateString(new Date());
+    if (!all.length) return { chartData: [], bucketUnit: "day" as Bucket };
 
-    for (const p of posts) {
-      const day = toCSTDateString(new Date(p.createdUtc * 1000));
-      const cur = map.get(day) || { upvotes: 0, comments: 0 };
-      cur.upvotes += p.score;
-      cur.comments += p.numComments;
-      map.set(day, cur);
-    }
-    for (const c of comments) {
-      const day = toCSTDateString(new Date(c.createdUtc * 1000));
-      const cur = map.get(day) || { upvotes: 0, comments: 0 };
-      cur.upvotes += c.score;
-      cur.comments += 1;
-      map.set(day, cur);
-    }
+    const days = all.map((x) => toCSTDateString(new Date(x.createdUtc * 1000)));
+    const firstCST = days.sort()[0];
+    const spanDays =
+      (Date.now() - new Date(firstCST + "T12:00:00Z").getTime()) / 86400000;
+    const unit = bucketFor(Math.min(spanDays, RANGE_DAYS[timeRange]));
 
-    const now = new Date();
-    const nowCST = toCSTDateString(now);
-    const days = { "7d": 7, "14d": 14, "30d": 30, all: 90 }[timeRange];
+    const map = new Map<string, { posts: number; comments: number }>();
+    const bump = (ts: number, key: "posts" | "comments") => {
+      const k = bucketKey(toCSTDateString(new Date(ts * 1000)), unit);
+      const cur = map.get(k) || { posts: 0, comments: 0 };
+      cur[key]++;
+      map.set(k, cur);
+    };
+    for (const p of posts) bump(p.createdUtc, "posts");
+    for (const c of comments) bump(c.createdUtc, "comments");
+
     const startCST =
-      timeRange === "all" && map.size > 0
-        ? Array.from(map.keys()).sort()[0]
-        : toCSTDateString(new Date(now.getTime() - days * 86400000));
+      timeRange === "all"
+        ? firstCST
+        : toCSTDateString(new Date(Date.now() - RANGE_DAYS[timeRange] * 86400000));
 
-    return fillDateRange(startCST, nowCST).map((d) => {
-      const v = map.get(d) || { upvotes: 0, comments: 0 };
-      return {
-        date: new Date(d + "T12:00:00Z").toLocaleDateString("en-US", {
-          timeZone: CST,
-          month: "short",
-          day: "numeric",
-        }),
-        raw: d,
-        upvotes: v.upvotes,
-        comments: v.comments,
-      };
+    const rows = fillBuckets(startCST, nowCST, unit).map((k) => {
+      const v = map.get(k) || { posts: 0, comments: 0 };
+      return { date: bucketLabel(k, unit), raw: k, posts: v.posts, comments: v.comments };
     });
+
+    return { chartData: rows, bucketUnit: unit };
   }, [posts, comments, timeRange]);
 
   const subreddits = useMemo(() => {
@@ -244,17 +281,15 @@ export default function Dashboard() {
         link: c.permalink,
       })),
     ];
-    return items.sort((a, b) => b.ts - a.ts).slice(0, 25);
+    return items.sort((a, b) => b.ts - a.ts);
   }, [posts, comments]);
 
-  const topPosts = useMemo(
-    () => [...posts].sort((a, b) => b.score - a.score).slice(0, 5),
-    [posts]
-  );
 
-  const activeMetricKey =
-    metric === "impressions" ? "upvotes" : (metric as "upvotes" | "comments");
-  const chartMax = Math.max(...chartData.map((d) => d[activeMetricKey]), 1);
+
+  const chartMax = Math.max(
+    ...chartData.map((d) => Math.max(d.posts, d.comments)),
+    1
+  );
 
   if (loading) {
     return (
@@ -288,11 +323,16 @@ export default function Dashboard() {
     if (!active || !payload?.length) return null;
     return (
       <div className="bg-zinc-900/95 border border-zinc-700/50 rounded-lg px-3 py-2 shadow-2xl backdrop-blur-sm">
-        <p className="text-zinc-500 text-[11px]">{label}</p>
-        <p className="text-zinc-50 text-sm font-semibold tabular-nums">
-          {payload[0].value.toLocaleString()}{" "}
-          <span className="text-zinc-500 font-normal">{metric}</span>
-        </p>
+        <p className="text-zinc-500 text-[11px] mb-1">{label}</p>
+        {payload.map((entry: any) => (
+          <p
+            key={entry.dataKey}
+            className="text-zinc-50 text-sm font-semibold tabular-nums"
+          >
+            {entry.value.toLocaleString()}{" "}
+            <span className="text-zinc-500 font-normal">{entry.dataKey}</span>
+          </p>
+        ))}
       </div>
     );
   };
@@ -377,19 +417,21 @@ export default function Dashboard() {
             Soma mentions
           </button>
 
-          <button
-            onClick={() => setCommentsOnly(!commentsOnly)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg border transition-all duration-200 ${
-              commentsOnly
-                ? "bg-blue-500/8 text-blue-400 border-blue-500/25"
-                : "text-zinc-600 border-zinc-800/50 hover:border-zinc-700 hover:text-zinc-400"
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full transition-colors ${commentsOnly ? "bg-blue-400" : "bg-zinc-700"}`}
-            />
-            Comments only
-          </button>
+          <div className="flex bg-zinc-900/40 border border-zinc-800/40 rounded-lg p-0.5">
+            {KIND_FILTERS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setKindFilter(key)}
+                className={`px-3.5 py-1.5 text-[11px] font-medium rounded-md transition-all duration-200 ${
+                  kindFilter === key
+                    ? "bg-blue-500/12 text-blue-400"
+                    : "text-zinc-600 hover:text-zinc-400"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Stat Cards ── */}
@@ -435,113 +477,71 @@ export default function Dashboard() {
         <div className="bg-[#111116] border border-[#1c1c24] rounded-xl p-5 mb-6">
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-[13px] font-medium text-zinc-400">
-              {metric === "impressions"
-                ? "Impressions"
-                : metric === "upvotes"
-                  ? "Upvotes"
-                  : "Comments"}{" "}
-              over time
+              Posting frequency
             </h2>
             <span className="text-[11px] text-zinc-700 tabular-nums">
-              {chartData.length} days
+              {chartData.length} {bucketUnit}s
             </span>
           </div>
 
-          {metric === "impressions" ? (
-            <div className="h-[280px] flex items-center justify-center">
-              <div className="text-center max-w-sm">
-                <div className="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-3">
-                  <svg
-                    className="w-5 h-5 text-zinc-600"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
+          <div className="h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={chartData}
+                margin={{ top: 5, right: 5, bottom: 0, left: -10 }}
+              >
+                <defs>
+                  <linearGradient
+                    id="chartGrad"
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="1"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"
+                    <stop
+                      offset="0%"
+                      stopColor="#f97316"
+                      stopOpacity={0.2}
                     />
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                    <stop
+                      offset="100%"
+                      stopColor="#f97316"
+                      stopOpacity={0}
                     />
-                  </svg>
-                </div>
-                <p className="text-zinc-400 text-sm mb-1">
-                  Impressions not available via API
-                </p>
-                <p className="text-zinc-600 text-xs leading-relaxed">
-                  Reddit doesn&apos;t expose view counts publicly. Check your{" "}
-                  <a
-                    href="https://www.reddit.com/user/Bulky-Possibility216"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-orange-500/70 hover:text-orange-400 underline underline-offset-2"
-                  >
-                    Reddit Creator Dashboard
-                  </a>{" "}
-                  for impression data.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={chartData}
-                  margin={{ top: 5, right: 5, bottom: 0, left: -10 }}
-                >
-                  <defs>
-                    <linearGradient
-                      id="chartGrad"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop
-                        offset="0%"
-                        stopColor="#f97316"
-                        stopOpacity={0.2}
-                      />
-                      <stop
-                        offset="100%"
-                        stopColor="#f97316"
-                        stopOpacity={0}
-                      />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="#1c1c24"
-                    vertical={false}
-                  />
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#3f3f46", fontSize: 10 }}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#3f3f46", fontSize: 10 }}
-                    width={35}
-                    domain={[0, Math.ceil(chartMax * 1.15)]}
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    content={<ChartTooltip />}
-                    cursor={{ stroke: "#27272a", strokeWidth: 1 }}
-                  />
+                  </linearGradient>
+                  <linearGradient id="chartGradBlue" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.2} />
+                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#1c1c24"
+                  vertical={false}
+                />
+                <XAxis
+                  dataKey="date"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: "#3f3f46", fontSize: 10 }}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fill: "#3f3f46", fontSize: 10 }}
+                  width={35}
+                  domain={[0, Math.ceil(chartMax * 1.15)]}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  content={<ChartTooltip />}
+                  cursor={{ stroke: "#27272a", strokeWidth: 1 }}
+                />
+                {kindFilter !== "comments" && (
                   <Area
                     type="monotone"
-                    dataKey={activeMetricKey}
+                    dataKey="posts"
                     stroke="#f97316"
                     strokeWidth={1.5}
                     fill="url(#chartGrad)"
@@ -553,10 +553,26 @@ export default function Dashboard() {
                       strokeWidth: 2,
                     }}
                   />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+                )}
+                {kindFilter !== "posts" && (
+                  <Area
+                    type="monotone"
+                    dataKey="comments"
+                    stroke="#3b82f6"
+                    strokeWidth={1.5}
+                    fill="url(#chartGradBlue)"
+                    dot={false}
+                    activeDot={{
+                      r: 3.5,
+                      fill: "#3b82f6",
+                      stroke: "#111116",
+                      strokeWidth: 2,
+                    }}
+                  />
+                )}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
 
         {/* ── Bottom Grid ── */}
@@ -613,10 +629,10 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Recent Activity */}
+          {/* All Activity */}
           <div className="lg:col-span-3 bg-[#111116] border border-[#1c1c24] rounded-xl p-5">
             <h2 className="text-[13px] font-medium text-zinc-400 mb-4">
-              Recent Activity
+              All Activity
             </h2>
             <div className="space-y-0.5 max-h-[420px] overflow-y-auto pr-1">
               {activity.map((item, i) => (
@@ -672,65 +688,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Top 5 Posts ── */}
-        <div className="bg-[#111116] border border-[#1c1c24] rounded-xl p-5 mt-6">
-          <h2 className="text-[13px] font-medium text-zinc-400 mb-4">
-            Top 5 Posts
-          </h2>
-          {topPosts.length > 0 ? (
-            <div className="space-y-0.5">
-              {topPosts.map((post, i) => (
-                <a
-                  key={post.id}
-                  href={`https://reddit.com${post.permalink}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-3 px-2.5 py-2.5 rounded-lg hover:bg-zinc-900/40 transition-colors group"
-                >
-                  <span className="text-[13px] font-bold text-zinc-700 tabular-nums w-5 text-center shrink-0">
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] text-zinc-400 group-hover:text-zinc-200 truncate transition-colors leading-snug">
-                      {post.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[10px] text-zinc-700">
-                        r/{post.subreddit}
-                      </span>
-                      <span className="text-[10px] text-zinc-800">·</span>
-                      <span className="text-[10px] text-orange-500/70 tabular-nums font-medium">
-                        {post.score.toLocaleString()} upvotes
-                      </span>
-                      <span className="text-[10px] text-zinc-800">·</span>
-                      <span className="text-[10px] text-zinc-600 tabular-nums">
-                        {post.numComments} comments
-                      </span>
-                      {post.mentionsSoma && (
-                        <>
-                          <span className="text-[10px] text-zinc-800">·</span>
-                          <span className="text-[10px] text-orange-600 font-medium">
-                            soma
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <p className="text-zinc-700 text-xs text-center py-8">
-              No posts to display
-            </p>
-          )}
-        </div>
-
         {/* ── Footer ── */}
         <div className="mt-10 pt-6 border-t border-zinc-900/80">
           <p className="text-[11px] text-zinc-800 text-center">
-            Data refreshes every 30 minutes via ISR · Cron configured for Vercel
-            Pro · Impressions require Reddit Creator Dashboard
+            Data updated by the local scrape script (npm run scrape:push) via the
+            Arctic Shift archive
           </p>
         </div>
       </div>
